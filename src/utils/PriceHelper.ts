@@ -53,69 +53,46 @@ export async function fetchZapperTotal(address: string): Promise<number> {
 
   try {
     const headers = {
-      'Cache-Control': 'no-cache',
-      Authorization: `Basic ${base64ZapperKey}`,
-      accept: 'application/json',
-      'User-Agent': 'Mozilla/5.0 (Windows NT 6.1; Win64; x64; rv:47.0) Gecko/20100101 Firefox/47.0'
+      'Content-Type': 'application/json',
+      Authorization: `Basic ${base64ZapperKey}`
     };
-    // post to zapper to force refresh data
-    const postOptions = {
-      method: 'post',
-      url: 'https://api.zapper.fi/v2/balances/apps',
-      params: {
-        'addresses[]': address,
-        'network[]': 'ethereum'
-      },
-      headers: headers
-    };
-    const postResponse = await axios(postOptions);
-    const jobId = postResponse.data.jobId;
 
-    // wait for job to complete by checking status every 5 seconds
-    let jobComplete = false;
-    while (!jobComplete) {
-      const getStatusOptions = {
-        method: 'get',
-        url: 'https://api.zapper.fi/v2/balances/job-status',
-        params: {
-          jobId: jobId
-        },
-        headers: headers
-      };
-
-      const getStatusResponse = await axios(getStatusOptions);
-      if (getStatusResponse.data.status == 'completed') {
-        console.log(`Job ${jobId} status is ${getStatusResponse.data.status}`);
-        jobComplete = true;
-      } else if (getStatusResponse.data.status == 'unknown') {
-        console.log('Zapper status is "unknown", restarting the process');
-        return await fetchZapperTotal(address);
-      } else {
-        console.log(`Job ${jobId} status is ${getStatusResponse.data.status}, waiting 5 seconds`);
-        await sleep(5000);
+    const graphqlQuery = {
+      query: `
+        query providerPorfolioQuery($addresses: [Address!]!, $networks: [Network!]!) {
+          portfolio(addresses: $addresses, networks: $networks) {
+            tokenBalances {
+              address
+              network
+              token {
+                balance
+                balanceUSD
+                baseToken {
+                  name
+                  symbol
+                }
+              }
+            }
+          }
+        }
+      `,
+      variables: {
+        addresses: [address],
+        networks: ['ETHEREUM_MAINNET']
       }
-    }
-
-    // get the value
-    const getOptions = {
-      method: 'get',
-      url: 'https://api.zapper.fi/v2/balances/apps',
-      params: {
-        'addresses[]': address,
-        'network[]': 'ethereum'
-      },
-      headers: headers
     };
 
-    const res = await axios(getOptions);
+    const response = await axios.post('https://public.zapper.xyz/graphql', graphqlQuery, { headers });
 
-    // sum balance usd of all data where network is ethereum
+    // Sum up all balanceUSD values
     let sumBalanceUsd = 0;
-    for (const result of res.data) {
-      if (result.network == 'ethereum') {
-        sumBalanceUsd += result.balanceUSD;
+    const tokenBalances = response.data?.data?.portfolio?.tokenBalances || [];
+    for (const balance of tokenBalances) {
+      if (balance.token?.balanceUSD) {
+        sumBalanceUsd += balance.token.balanceUSD;
       }
     }
+
     return sumBalanceUsd;
   } catch (e) {
     console.error(`fetchZapperTotal for ${address} failed`);
